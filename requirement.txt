@@ -1,0 +1,3 @@
+pyvisual
+cvzone
+pyserial

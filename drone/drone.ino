@@ -17,6 +17,7 @@ struct DroneStatus {
 };
 struct RxDataType {
   DroneStatus status;
+  float basicThrust;
   bool stop;
   bool isReceive;
 };
@@ -91,11 +92,11 @@ RxDataType commute(TxDataType payloadTx){
   RxDataType payloadRx;
   if(radio.available()){
     radio.read(&payloadRx, sizeof(payloadRx));
-    Serial.print(F("Received"));
+    Serial.println("Received");
     radio.writeAckPayload(1, &payloadTx, sizeof(payloadTx));
   }else{
     payloadRx.isReceive = false;
-    Serial.print(F("Not Received"));
+    Serial.println("Not Received");
   }
 
   return payloadRx;
@@ -197,10 +198,10 @@ void loop() {
     lastErr[i] = error[i];
   }
 
-  currentSpeed[0] = (-pid[0]) + (-pid[1]) + (pid[2]);
-  currentSpeed[1] = (-pid[0]) + (pid[1]) + (pid[2]);
-  currentSpeed[2] = (pid[0]) + (pid[1]) + (pid[2]);
-  currentSpeed[3] = (pid[0]) + (-pid[1]) + (pid[2]);
+  currentSpeed[0] = payloadRx.basicThrust + (-pid[0]) + (-pid[1]) + (pid[2]);
+  currentSpeed[1] = payloadRx.basicThrust + (-pid[0]) + (pid[1]) + (pid[2]);
+  currentSpeed[2] = payloadRx.basicThrust + (pid[0]) + (pid[1]) + (pid[2]);
+  currentSpeed[3] = payloadRx.basicThrust + (pid[0]) + (-pid[1]) + (pid[2]);
 
   if(payloadRx.status.yaw == 0){
   }else if(payloadRx.status.yaw == 1){

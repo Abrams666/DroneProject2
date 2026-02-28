@@ -4,71 +4,61 @@
 #include "printf.h"
 #include "RF24.h"
 
-//const
-#define CE_PIN 7
-#define CSN_PIN 8
-uint8_t address[][8] = { "droneRx","droneTx" };
+//structure
+struct DroneStatus {
+  float pitch;
+  float roll;
+  float yaw;
+  float a[3];
+  float v[3];
+  unsigned long lastTime;
+};
 struct TxDataType {
-  int targetPitch;
-  int targetRoll;
-  int targetThrust;
-  int yawDir;
+  DroneStatus status;
+  float basicThrust;
   bool stop;
   bool isReceive;
 };
 struct RxDataType {
-  int FR;
-  int FL;
-  int BR;
-  int BL;
-  int pitch;
-  int roll;
-  int heading;
+  DroneStatus status;
+  int speed[4];
   bool isReceive;
 };
+
+//const
+#define CE_PIN 7
+#define CSN_PIN 8
+uint8_t address[][8] = { "droneRx","droneTx" };
 
 //config
 RF24 radio(CE_PIN, CSN_PIN);
 SerialData serialData(1, 1);
 
 //val
-bool comType = true;
-int targetPitch = 0;
-int targetRoll = 0;
-int yawDir = 1;
-int keyPressed[1];
+DroneStatus currentDroneStatus;
 TxDataType payloadTx;
 RxDataType payloadRx;
-bool xxx = true;
+int keyPressed[1];
 
 //func
-void tx(TxDataType payload) {
+RxDataType commute(TxDataType payloadTx){
+  RxDataType payloadRx;
+
   radio.stopListening();
-  unsigned long start_timer = micros();
-  bool report = radio.write(&payload, sizeof(TxDataType));
-  unsigned long end_timer = micros();
+  bool ok = radio.write(&payloadTx, sizeof(payloadTx));
 
-  if (report) {
-    Serial.println(F("Send"));
-  } else {
-    Serial.println(F("Transmission failed or timed out"));
-  }
-  radio.startListening();
-}
-
-RxDataType rx() {
-  RxDataType payload;
-
-  uint8_t pipe;
-  if (radio.available(&pipe)) {
-    uint8_t bytes = radio.getPayloadSize();
-    radio.read(&payload, bytes);
-    xxx = false;
+  if(radio.isAckPayloadAvailable()){
+    radio.read(&payloadRx, sizeof(payloadRx));
+    Serial.println("Recieved");
+    radio.writeAckPayload(1, &payloadTx, sizeof(payloadTx));
   }else{
-    payload.isReceive = false;
+    payloadRx.isReceive = false;
+    Serial.println("Not Recieved");
   }
 
-  return payload;
+  radio.startListening();
+
+  return payloadRx;
 }
 
 //setup
@@ -92,8 +82,8 @@ void setup() {
   radio.setPayloadSize(sizeof(RxDataType));
   radio.openWritingPipe(address[1]);
   radio.openReadingPipe(1, address[0]);
-  radio.stopListening();
-  payloadRx.isReceive = false;
+  radio.enableAckPayload();
+  radio.enableDynamicPayloads();
   
   //setup cvzone
   serialData.begin();
@@ -104,27 +94,41 @@ void loop() {
   //get control data
   serialData.Get(keyPressed);
   if (keyPressed[0] == 87) {
-    payloadTx.targetPitch = 10;
+    payloadTx.status.v[0] = 1;
   } else if (keyPressed[0] == 83) {
-    payloadTx.targetPitch = -10;
+    payloadTx.status.v[0] = -1;
   } else {
-    payloadTx.targetPitch = 0;
+    payloadTx.status.v[0] = 0;
   }
 
-  if (keyPressed[0] == 65) {
-    payloadTx.targetRoll = -10;
-  } else if (keyPressed[0] == 68) {
-    payloadTx.targetRoll = 10;
+  if (keyPressed[0] == 68) {
+    payloadTx.status.v[1] = 1;
+  } else if (keyPressed[0] == 65) {
+    payloadTx.status.v[1] = -1;
   } else {
-    payloadTx.targetRoll = 0;
+    payloadTx.status.v[1] = 0;
   }
 
-  if (keyPressed[0] == 81) {
-    payloadTx.yawDir = -1;
-  } else if (keyPressed[0] == 69) {
-    payloadTx.yawDir = 1;
+  if (keyPressed[0] == 69) {
+    payloadTx.status.v[2] = 1;
+  } else if (keyPressed[0] == 81) {
+    payloadTx.status.v[2] = -1;
   } else {
-    payloadTx.yawDir = 0;
+    payloadTx.status.v[2] = 0;
+  }
+
+  if (keyPressed[0] == 67) {
+    payloadTx.status.yaw = 1;
+  } else if (keyPressed[0] == 90) {
+    payloadTx.status.yaw = -1;
+  } else {
+    payloadTx.status.yaw = 0;
+  }
+
+  if (keyPressed[0] == 16777248) {
+    payloadTx.basicThrust += 10;
+  } else if (keyPressed[0] == 16777249) {
+    payloadTx.basicThrust -= 10;
   }
 
   if(keyPressed[0] == 88) {
@@ -135,18 +139,8 @@ void loop() {
 
   payloadTx.isReceive = true;
 
-  Serial.println(xxx);
-  //tx
-  if(payloadRx.isReceive || xxx){
-    tx(payloadTx);
-  }
-
-  //rx
-  radio.startListening();
-  payloadRx = rx();
-
-  //send current status
-  //serialData.Send(payloadRx);
+  //commute
+  payloadRx = commute(payloadTx);
 
   //delay
   delay(10);

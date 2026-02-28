@@ -24,6 +24,7 @@ struct RxDataType {
   int pitch;
   int roll;
   int heading;
+  bool isReceive;
 };
 
 //config
@@ -35,25 +36,24 @@ bool comType = true;
 int targetPitch = 0;
 int targetRoll = 0;
 int yawDir = 1;
-int mySwitch[1];
+int keyPressed[1];
 TxDataType payloadTx;
 RxDataType payloadRx;
+bool xxx = true;
 
 //func
 void tx(TxDataType payload) {
+  radio.stopListening();
   unsigned long start_timer = micros();
   bool report = radio.write(&payload, sizeof(TxDataType));
   unsigned long end_timer = micros();
 
   if (report) {
-    // Serial.print(F("Transmission successful! "));
-    // Serial.print(F("Time to transmit = "));
-    // Serial.print(end_timer - start_timer);
-    // Serial.print(F(" us. Sent: "));
-    // Serial.println(payload);
+    Serial.println(F("Send"));
   } else {
     Serial.println(F("Transmission failed or timed out"));
   }
+  radio.startListening();
 }
 
 RxDataType rx() {
@@ -63,12 +63,9 @@ RxDataType rx() {
   if (radio.available(&pipe)) {
     uint8_t bytes = radio.getPayloadSize();
     radio.read(&payload, bytes);
-    // Serial.print(F("Received "));
-    // Serial.print(bytes);
-    // Serial.print(F(" bytes on pipe "));
-    // Serial.print(pipe);
-    // Serial.print(F(": "));
-    // Serial.println(payload);
+    xxx = false;
+  }else{
+    payload.isReceive = false;
   }
 
   return payload;
@@ -96,6 +93,7 @@ void setup() {
   radio.openWritingPipe(address[1]);
   radio.openReadingPipe(1, address[0]);
   radio.stopListening();
+  payloadRx.isReceive = false;
   
   //setup cvzone
   serialData.begin();
@@ -104,11 +102,44 @@ void setup() {
 //start
 void loop() {
   //get control data
-  //serialData.Get(payloadTx);
+  serialData.Get(keyPressed);
+  if (keyPressed[0] == 87) {
+    payloadTx.targetPitch = 10;
+  } else if (keyPressed[0] == 83) {
+    payloadTx.targetPitch = -10;
+  } else {
+    payloadTx.targetPitch = 0;
+  }
 
+  if (keyPressed[0] == 65) {
+    payloadTx.targetRoll = -10;
+  } else if (keyPressed[0] == 68) {
+    payloadTx.targetRoll = 10;
+  } else {
+    payloadTx.targetRoll = 0;
+  }
+
+  if (keyPressed[0] == 81) {
+    payloadTx.yawDir = -1;
+  } else if (keyPressed[0] == 69) {
+    payloadTx.yawDir = 1;
+  } else {
+    payloadTx.yawDir = 0;
+  }
+
+  if(keyPressed[0] == 88) {
+    payloadTx.stop = true;
+  } else {
+    payloadTx.stop = false;
+  }
+
+  payloadTx.isReceive = true;
+
+  Serial.println(xxx);
   //tx
-  radio.stopListening();
-  tx(payloadTx);
+  if(payloadRx.isReceive || xxx){
+    tx(payloadTx);
+  }
 
   //rx
   radio.startListening();

@@ -1,3 +1,2 @@
-pyvisual
 cvzone
-pyserial
+PyQt6

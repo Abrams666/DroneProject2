@@ -11,20 +11,15 @@ struct DroneStatus {
   float pitch;
   float roll;
   float yaw;
-  float a[3];
-  float v[3];
-  unsigned long lastTime;
 };
 struct RxDataType {
   DroneStatus status;
   float basicThrust;
   bool stop;
-  bool isReceive;
 };
 struct TxDataType {
   DroneStatus status;
   int speed[4];
-  bool isReceive;
 };
 
 //const
@@ -35,7 +30,6 @@ uint8_t address[][8] = { "droneRx","droneTx" };
 #define motorFLPin A1
 #define motorBRPin A2
 #define motorBLPin A3
-const int P = 10;
 const int yawSpeed = 100;
 const float kp = 10;
 const float ki = 0;
@@ -63,26 +57,34 @@ float integral[3];
 float lastErr[3];
 unsigned long lastReciveTime = micros();
 unsigned long lastTime = micros();
+bool isReceive = true;
+float basicThrust = 1000;
+bool isReady = false;
+float pitchErr = 0;
+float rollErr = 0;
 
 //func
+void sstop(){
+  motorFR.writeMicroseconds(0);
+  motorFL.writeMicroseconds(0);
+  motorBR.writeMicroseconds(0);
+  motorBL.writeMicroseconds(0);
+
+  while(1) {}
+}
+
 DroneStatus getStatus(DroneStatus currentDroneStatus){
   DroneStatus sta = currentDroneStatus;
 
   if(mpu.update()){
-    unsigned long currentTime = micros();
-    unsigned long dt = (currentTime - sta.lastTime)/1000000;
-    if(dt <= 0) dt = 0.000001;
-
-    sta.pitch = float(mpu.getPitch());
-    sta.roll = float(mpu.getRoll());
+    if(isReady){
+      sta.pitch = float(mpu.getPitch()) - pitchErr;
+      sta.roll = float(mpu.getRoll()) - rollErr;
+    }else{
+      sta.pitch = float(mpu.getPitch());
+      sta.roll = float(mpu.getRoll());
+    }
     sta.yaw = float(mpu.getYaw());
-    sta.a[0] = float(mpu.getAccX());
-    sta.a[1] = float(mpu.getAccY());
-    sta.a[2] = float(mpu.getAccZ());
-    sta.v[0] += sta.a[0] * dt;
-    sta.v[1] += sta.a[1] * dt;
-    sta.v[2] += sta.a[2] * dt;
-    sta.lastTime = currentTime;
   }
 
   return sta;
@@ -92,11 +94,11 @@ RxDataType commute(TxDataType payloadTx){
   RxDataType payloadRx;
   if(radio.available()){
     radio.read(&payloadRx, sizeof(payloadRx));
-    Serial.println("Received");
+    isReceive = true;
     radio.writeAckPayload(1, &payloadTx, sizeof(payloadTx));
   }else{
-    payloadRx.isReceive = false;
-    Serial.println("Not Received");
+    isReceive = false;
+    //Serial.println("Not Received");
   }
 
   return payloadRx;
@@ -105,8 +107,9 @@ RxDataType commute(TxDataType payloadTx){
 int checkSpeed(int speed) {
   if(speed > 2000){
     speed = 2000;
-  }else if(speed < 1000){
-    speed = 1000;
+  }
+  else if(speed < 1100){
+    speed = 1100;
   }
 
   return speed;
@@ -114,7 +117,7 @@ int checkSpeed(int speed) {
 
 //setup
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   printf_begin();
   Wire.begin();
 
@@ -151,6 +154,12 @@ void setup() {
   motorFL.attach(motorFLPin);
   motorBR.attach(motorBRPin);
   motorBL.attach(motorBLPin);
+
+
+  motorFR.writeMicroseconds(1000);
+  motorFL.writeMicroseconds(1000);
+  motorBR.writeMicroseconds(1000);
+  motorBL.writeMicroseconds(1000);
 }
 
 //start
@@ -164,44 +173,46 @@ void loop() {
   payloadTx.speed[1] = currentSpeed[1];
   payloadTx.speed[2] = currentSpeed[2];
   payloadTx.speed[3] = currentSpeed[3];
-  payloadTx.isReceive = true;
 
   payloadRx = commute(payloadTx);
 
-  if(!payloadRx.isReceive){
+  if(currentDroneStatus.pitch > 30 || currentDroneStatus.roll > 30 || currentDroneStatus.pitch < -30 || currentDroneStatus.roll < -30){
+    sstop();
+  }
+
+  if(!isReceive){
     if(micros() - lastReciveTime >= 5000000){
-      stop = 0;
+      sstop();
     }
   }else{
+    basicThrust = payloadRx.basicThrust;
     lastReciveTime = micros();
-    stop = payloadRx.stop;
+    if(payloadRx.stop == 1){
+      sstop();
+    }
+  }
+
+  if(payloadRx.status.yaw == 1){
+    isReady = true;
   }
 
   //apply control
-  if(stop == 1){
-    motorFR.writeMicroseconds(1000);
-    motorFL.writeMicroseconds(1000);
-    motorBR.writeMicroseconds(1000);
-    motorBL.writeMicroseconds(1000);
-
-    while(1) {}
-  }
-
   unsigned long currentTime = micros();
-  unsigned long dt = (currentTime - lastTime) / 1000000;
+  float dt = (currentTime*1.0 - lastTime*1.0) / 1000000;
   if(dt <= 0) dt = 0.000001;
   lastTime = currentTime;
-  for(int i = 0; i < 3; i++){
-    error[i] = payloadRx.status.v[i] - currentDroneStatus.v[i];
-    integral[i] += error[i] * dt;
-    pid[i] = (kp * error[i]) + (ki * integral[i]) + (kd * ((error[i] - lastErr[i]) / dt));
-    lastErr[i] = error[i];
-  }
 
-  currentSpeed[0] = payloadRx.basicThrust + (-pid[0]) + (-pid[1]) + (pid[2]);
-  currentSpeed[1] = payloadRx.basicThrust + (-pid[0]) + (pid[1]) + (pid[2]);
-  currentSpeed[2] = payloadRx.basicThrust + (pid[0]) + (pid[1]) + (pid[2]);
-  currentSpeed[3] = payloadRx.basicThrust + (pid[0]) + (-pid[1]) + (pid[2]);
+  error[0] = payloadRx.status.pitch - currentDroneStatus.pitch;
+  error[1] = payloadRx.status.roll - currentDroneStatus.roll;
+  pid[0] = (kp * error[0]) + (ki * integral[0]) + (kd * ((error[0] - lastErr[0]) / dt));
+  pid[1] = (kp * error[1]) + (ki * integral[1]) + (kd * ((error[1] - lastErr[1]) / dt));
+  lastErr[0] = error[0];
+  lastErr[1] = error[1];
+
+  currentSpeed[0] = basicThrust + (pid[0]) + (pid[1]);
+  currentSpeed[1] = basicThrust + (pid[0]) + (-pid[1]);
+  currentSpeed[2] = basicThrust + (-pid[0]) + (-pid[1]);
+  currentSpeed[3] = basicThrust + (-pid[0]) + (pid[1]);
 
   if(payloadRx.status.yaw == 0){
   }else if(payloadRx.status.yaw == 1){
@@ -220,10 +231,57 @@ void loop() {
     currentSpeed[i] = checkSpeed(currentSpeed[i]);
   }
 
-  motorFL.writeMicroseconds(currentSpeed[0]);
-  motorFR.writeMicroseconds(currentSpeed[1]);
-  motorBR.writeMicroseconds(currentSpeed[2]);
-  motorBL.writeMicroseconds(currentSpeed[3]);
+  if(isReady){
+    motorFL.writeMicroseconds(currentSpeed[0]);
+    motorFR.writeMicroseconds(currentSpeed[1]);
+    motorBR.writeMicroseconds(currentSpeed[2]);
+    motorBL.writeMicroseconds(currentSpeed[3]);
+  }else{
+    pitchErr = currentDroneStatus.pitch;
+    rollErr = currentDroneStatus.roll;
+
+    motorFL.writeMicroseconds(1000);
+    motorFR.writeMicroseconds(1000);
+    motorBR.writeMicroseconds(1000);
+    motorBL.writeMicroseconds(1000);
+
+    currentSpeed[0] = 1000;
+    currentSpeed[1] = 1000;
+    currentSpeed[2] = 1000;
+    currentSpeed[3] = 1000;
+  }
+
+
+  // Serial.print("Pitch:");
+  // Serial.print(currentDroneStatus.pitch);
+  // Serial.print(" Row:");
+  // Serial.print(currentDroneStatus.roll);
+  // Serial.print(" Yaw:");
+  // Serial.print(currentDroneStatus.yaw);
+
+  //     Serial.print(" ErrorX");
+  // Serial.print(error[0]);
+  //       Serial.print(" ErrorY");
+  // Serial.print(error[1]);
+  //       Serial.print(" ErrorZ");
+  // Serial.print(error[2]);
+  //   Serial.print(" PIDX");
+  // Serial.print(pid[0]);
+  // Serial.print(" PIDY");
+  // Serial.print(pid[1]);
+  // Serial.print(" PIDZ");
+  // Serial.print(pid[2]);
+
+  // Serial.print(" BT");
+  // Serial.print(basicThrust);
+  // Serial.print(" FL");
+  // Serial.print(currentSpeed[0]);
+  // Serial.print(" FR");
+  // Serial.print(currentSpeed[1]);
+  // Serial.print(" BR");
+  // Serial.print(currentSpeed[2]);
+  // Serial.print(" BL");
+  // Serial.println(currentSpeed[3]);
 
   //delay
   delay(10);

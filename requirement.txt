@@ -1,2 +1,2 @@
-cvzone
 PyQt6
+asyncio
